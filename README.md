@@ -27,7 +27,7 @@ api_key = "YOUR_API_KEY"  # Remplacez par votre clé API DeepL
 ## Installation 💽
 
 1. Clonez ce dépôt :
-   git clone https://github.com/votre-nom/nitro-translator.git
+   git clone https://github.com/votre-nom/nitro-translator.git](https://github.com/stormdaemon/nitro_translator.git
    cd nitro-translator
 
 2. Double-cliquez sur `install.bat` pour installer les dépendances Python nécessaires.
