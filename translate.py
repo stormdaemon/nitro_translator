@@ -3,7 +3,7 @@ import time
 import re
 import multiprocessing as mp
 from functools import partial
-from googletrans import Translator, constants
+from googletrans import Translator
 from tqdm import tqdm
 import requests
 
@@ -11,7 +11,7 @@ def clean_json_file(file_path):
     with open(file_path, 'r', encoding='utf-8') as f:
         content = f.read()
 
-    # Supprimer les commentaires JSON (non standard mais parfois utilisés)
+    # Supprimer les commentaires JSON
     content = re.sub(r'//.*\n', '\n', content)
     content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
 
@@ -23,32 +23,17 @@ def clean_json_file(file_path):
     content = re.sub(r':\s*}', ': ""}', content)
 
     try:
-        # Essayer de charger le JSON
         data = json.loads(content)
     except json.JSONDecodeError as e:
         print(f"Erreur JSON dans {file_path}: {e}")
-        # En cas d'erreur, sauvegarder le contenu modifié pour inspection
         with open(file_path.replace('.json', '_cleaned.json'), 'w', encoding='utf-8') as f:
             f.write(content)
         return None
 
-    # Sauvegarder le JSON nettoyé
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
     return data
-
-def translate_with_retry(text, target_lang, max_retries=3):
-    for _ in range(max_retries):
-        try:
-            translator = Translator()
-            time.sleep(0.1)
-            translated = translator.translate(text, dest=target_lang)
-            if translated and translated.text:
-                return translated.text
-        except Exception:
-            pass
-    return None
 
 def translate_with_deepl(text, target_lang):
     api_key = "YOUR_API_KEY"  # Remplacez par votre clé API DeepL
@@ -63,59 +48,46 @@ def translate_with_deepl(text, target_lang):
         return response.json()['translations'][0]['text']
     return None
 
-def translate_item(item, target_lang):
-    key, value = item
-    if isinstance(value, str):
-        translated = translate_with_retry(value, target_lang)
-        if not translated:
-            translated = translate_with_deepl(value, target_lang)
-        if translated:
-            return key, translated
-    return key, value
+def translate_batch(texts, target_lang, max_retries=3):
+    translator = Translator()
+    with requests.Session() as session:
+        for _ in range(max_retries):
+            try:
+                translations = translator.translate(texts, dest=target_lang)
+                return [t.text for t in translations]
+            except Exception:
+                time.sleep(1)
+    return [translate_with_deepl(text, target_lang) for text in texts]
 
-def translate_json(file_path, target_lang):
-    # Nettoyer et charger le fichier JSON
+def translate_json(file_path, target_lang, batch_size=10):
     data = clean_json_file(file_path)
     if not data:
         print(f"Impossible de traduire {file_path} en raison d'erreurs JSON.")
         return
-    
-    # Préparer la fonction de traduction avec la langue cible
-    translate_func = partial(translate_item, target_lang=target_lang)
-    
-    # Initialiser la barre de progression
-    total_keys = len(data)
-    pbar = tqdm(total=total_keys, desc=f"Traduction de {file_path}", unit="clé")
-    
-    # Traduire chaque valeur dans le JSON
-    results = []
-    for result in map(translate_func, data.items()):
-        results.append(result)
-        pbar.update(1)
-    
-    # Fermer la barre de progression
-    pbar.close()
-    
-    # Reconstruire le dictionnaire à partir des résultats
-    translated_data = dict(results)
-    
-    # Sauvegarder le JSON traduit
+
+    items = list(data.items())  # Conversion en liste pour l'indexation
+    total_keys = len(items)
+
+    with mp.Pool() as pool:
+        batches = [items[i:i+batch_size] for i in range(0, total_keys, batch_size)]
+        results = list(tqdm(pool.imap(partial(translate_batch, target_lang=target_lang), batches), 
+                            total=len(batches), desc=f"Traduction de {file_path}", unit="batch"))
+
+    translated_data = {}
+    for batch_result in results:
+        for key, value in batch_result:
+            translated_data[key] = value
+
     output_path = file_path.replace('.json', f'_{target_lang}.json')
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(translated_data, f, ensure_ascii=False, indent=4)
-    
     print(f"Traduit et sauvegardé dans {output_path}")
 
-# Point d'entrée principal
 if __name__ == '__main__':
     print("Traduction des fichiers external_text et ui_text en cours...")
-
-    # Traduire les fichiers en français
     try:
-        translate_json('ExternalTexts.json', 'fr')
-        translate_json('UItexts.json', 'fr')
+        translate_json('ExternalTexts.json', 'fr', batch_size=20)
+        translate_json('UItexts.json', 'fr', batch_size=20)
     except Exception as e:
         print(f"\nUne erreur est survenue : {e}")
-
-    # Message de fin
     print("Traduction terminée !")
